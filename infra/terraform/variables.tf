@@ -3,6 +3,22 @@ variable "db_password" {
   sensitive = true
 }
 
+
+variable "db_username" {
+  type      = string
+  sensitive = true
+}
+
+variable "db_name" {
+  type      = string
+  sensitive = true
+}
+
+variable "db_host" {
+  type      = string
+  sensitive = true
+}
+
 variable "jwt_secret" {
   type      = string
   sensitive = true
