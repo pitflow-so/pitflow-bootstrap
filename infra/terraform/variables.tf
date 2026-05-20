@@ -3,7 +3,6 @@ variable "db_password" {
   sensitive = true
 }
 
-
 variable "db_username" {
   type      = string
   sensitive = true
@@ -15,6 +14,11 @@ variable "db_name" {
 }
 
 variable "db_host" {
+  type      = string
+  sensitive = true
+}
+
+variable "db_port" {
   type      = string
   sensitive = true
 }
