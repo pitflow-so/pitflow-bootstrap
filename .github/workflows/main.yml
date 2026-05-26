@@ -96,6 +96,7 @@ jobs:
             -var="mock_message=${{ secrets.MOCK_MESSAGE }}" \
             -var="mail_username=${{ secrets.MAIL_USERNAME }}" \
             -var="mail_password=${{ secrets.MAIL_PASSWORD }}" \
+            -var="datadog_api_key=${{ secrets.DATADOG_API_KEY }}" \
             -out=main.tfplan
 
       - name: Terraform Apply
