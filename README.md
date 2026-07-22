@@ -23,16 +23,13 @@ Os arquivos ficam em `infra/terraform`:
 
 - `provider.tf`: configura Terraform, provider AWS e região.
 - `secret.tf`: cria o secret `pitflow/bootstrap`, sem gerenciar uma versão.
-- `removed.tf`: remove a versão antiga apenas do state, sem destruir a versão
-  existente no AWS Secrets Manager.
 - `outputs.tf`: expõe o nome do secret.
 - `backend.tf`: armazena o state no bucket S3
   `tfstate-backend-fiap-pitflow`.
 
-Como novos valores sensíveis não são enviados ao Terraform, eles não são
-armazenados no state deste repositório. Na primeira execução após esta migração,
-o bloco `removed` preserva a versão antiga no AWS Secrets Manager e remove
-somente seu vínculo com o state.
+Como os valores sensíveis não são enviados ao Terraform, eles não são
+armazenados no state deste repositório. Na primeira execução, o Terraform cria
+o contêiner vazio e o workflow publica a primeira versão com o conteúdo JSON.
 
 ## Conteúdo do secret
 
@@ -137,12 +134,13 @@ O workflow `.github/workflows/main.yml` executa em pushes para `main` ou
 manualmente por `workflow_dispatch`.
 
 1. Cria o bucket de state caso ele ainda não exista.
-2. Executa `terraform fmt`, `validate`, `plan` e `apply`.
+2. Executa `terraform fmt`, `validate` e `plan`.
 3. Valida se todos os GitHub Secrets obrigatórios foram configurados.
-4. Lê o JSON atual do Secrets Manager.
-5. Mescla apenas as chaves pertencentes ao bootstrap e inicializa host/porta
+4. Executa o `terraform apply` para criar ou atualizar o contêiner do secret.
+5. Lê o JSON atual do Secrets Manager.
+6. Mescla apenas as chaves pertencentes ao bootstrap e inicializa host/porta
    somente quando ainda não existem.
-6. Publica uma nova versão do secret sem registrar seu conteúdo nos logs.
+7. Publica uma nova versão do secret sem registrar seu conteúdo nos logs.
 
 O principal da AWS usado pelo workflow precisa de acesso ao bucket de state e
 das permissões necessárias para criar, descrever, ler e publicar versões em
@@ -152,8 +150,7 @@ das permissões necessárias para criar, descrever, ler e publicar versões em
 
 Configure credenciais AWS e execute:
 
-É necessário Terraform `>= 1.7.0` por causa do bloco `removed` usado na
-migração segura da versão antiga.
+É necessário Terraform `>= 1.5.0`.
 
 ```bash
 cd infra/terraform
