@@ -29,7 +29,7 @@ jobs:
 
       - name: Create TF State Bucket if not exists
         run: |
-          if ! aws s3api head-bucket --bucket tfstate-backend-fiap-pitflow 2>/dev/null; then
+          if ! aws s3api head-bucket --bucket tfstate-backend-pitflow-bootstrap 2>/dev/null; then
               echo "Criando bucket Terraform State..."
               aws s3 mb s3://tfstate-backend-fiap-pitflow --region us-east-1
 
