@@ -31,11 +31,11 @@ jobs:
         run: |
           if ! aws s3api head-bucket --bucket tfstate-backend-pitflow-bootstrap 2>/dev/null; then
               echo "Criando bucket Terraform State..."
-              aws s3 mb s3://tfstate-backend-fiap-pitflow --region us-east-1
+              aws s3 mb s3://tfstate-backend-pitflow-bootstrap --region us-east-1
 
               echo "Habilitando versionamento..."
               aws s3api put-bucket-versioning \
-                --bucket tfstate-backend-fiap-pitflow \
+                --bucket tfstate-backend-pitflow-bootstrap \
                 --versioning-configuration Status=Enabled
 
           else
