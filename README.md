@@ -1,191 +1,108 @@
 # pitflow-bootstrap
 
-Bootstrap de infraestrutura e base de CI/CD do projeto PITFLOW.
+Bootstrap da infraestrutura compartilhada do Pitflow na AWS.
 
-Este repositório concentra a configuração inicial de infraestrutura na AWS usando Terraform e GitHub Actions. <br>
-O projeto cria um secret no AWS Secrets Manager para armazenar variáveis sensíveis usadas pela aplicação.
+Este repositório cria o bucket usado pelo backend do Terraform e o secret
+`pitflow/bootstrap` no AWS Secrets Manager. O Terraform gerencia somente o
+contêiner do secret. O conteúdo JSON é atualizado pelo GitHub Actions para que
+outros repositórios possam alterar apenas as chaves sob sua responsabilidade.
 
-## Componentes principais
+## Responsabilidades
 
-### Terraform
+- `pitflow-bootstrap`: cria o secret e mescla credenciais, nomes dos bancos e
+  configurações compartilhadas.
+- `pitflow-database`: cria o RDS e atualiza os hosts e portas dos bancos sem
+  substituir as outras chaves do secret.
 
-Os arquivos Terraform ficam em `infra/terraform`.
+Essa separação impede que uma nova execução do bootstrap restaure os hosts para
+valores vazios depois que o RDS for criado.
 
-- `provider.tf`: define a versão minima do Terraform, o provider AWS e a região.
-- `variables.tf`: declara variáveis sensíveis usadas para montar o conteúdo do secret.
-- `secret.tf`: cria o recurso `aws_secretsmanager_secret` chamado `pitflow/bootstrap` e grava uma versão do secret com os valores em JSON.
-- `outputs.tf`: expõe o nome do secret criado por meio do output `secret_pitflow_name`.
-- `backend.tf`: contem a configuração de backend S3 para armazenar o state remoto. Para execução local com state local, comente esse bloco antes de executar `terraform init`.
+## Terraform
 
-### GitHub Actions
+Os arquivos ficam em `infra/terraform`:
 
-O workflow `.github/workflows/main.yml` executa em pushes para a branch `main` e também manualmente via `workflow_dispatch`.
+- `provider.tf`: configura Terraform, provider AWS e região.
+- `secret.tf`: cria o secret `pitflow/bootstrap`, sem gerenciar uma versão.
+- `outputs.tf`: expõe o nome do secret.
+- `backend.tf`: armazena o state no bucket S3
+  `tfstate-backend-fiap-pitflow`.
 
-Ele possui dois jobs:
+Como os valores sensíveis não são enviados ao Terraform, eles não são
+armazenados no state deste repositório. Na primeira execução, o Terraform cria
+o contêiner vazio e o workflow publica a primeira versão com o conteúdo JSON.
 
-1. `bootstrap-s3`: configura credenciais AWS e cria o bucket S3 `tfstate-backend-fiap-pitflow`, caso ele ainda nao exista.
-2. `infrastructure`: executa os comandos terraform para criação dos recursos.
+## Conteúdo do secret
 
-## Variáveis de ambiente e secrets
+O secret contém as seguintes chaves:
 
-O projeto usa variáveis sensíveis para nao deixar senhas, tokens e dados privados diretamente no código versionado.
+```text
+PITFLOW_OPERATION_DB_NAME
+PITFLOW_OPERATION_DB_USERNAME
+PITFLOW_OPERATION_DB_PASSWORD
+PITFLOW_OPERATION_DB_HOST
+PITFLOW_OPERATION_DB_PORT
 
-As variáveis declaradas no Terraform sao:
+PITFLOW_INVENTORY_DB_NAME
+PITFLOW_INVENTORY_DB_USERNAME
+PITFLOW_INVENTORY_DB_PASSWORD
+PITFLOW_INVENTORY_DB_HOST
+PITFLOW_INVENTORY_DB_PORT
 
-| Variável | Uso | Justificativa |
-| --- | --- | --- |
-| `db_password` | Senha de banco de dados | Dado sensível |
-| `jwt_secret` | Chave usada para assinatura/validação de JWT | Dado sensível |
-| `mock_message` | Mensagem ou valor de teste sensível | Mantida como secret para permitir troca por ambiente sem alterar código. |
-| `mail_username` | Usuário/conta de e-mail | Pode identificar conta de serviço ou integração externa. |
-| `mail_password` | Senha da conta de e-mail | Dado sensível |
+PITFLOW_REGISTRY_DB_NAME
+PITFLOW_REGISTRY_DB_USERNAME
+PITFLOW_REGISTRY_DB_PASSWORD
+PITFLOW_REGISTRY_DB_HOST
+PITFLOW_REGISTRY_DB_PORT
 
-Na execução local, esses valores devem ser informados em `infra/terraform/terraform.tfvars`.
+PITFLOW_PAYMENT_DB_NAME
+PITFLOW_PAYMENT_DB_USERNAME
+PITFLOW_PAYMENT_DB_PASSWORD
+PITFLOW_PAYMENT_DB_HOST
+PITFLOW_PAYMENT_DB_PORT
 
-Na GitHub Action, esses valores vem de GitHub Secrets:
+PITFLOW_ORCHESTRATOR_TABLE_NAME
+PITFLOW_ORCHESTRATOR_AWS_REGION
 
-- `DB_PASSWORD`
-- `JWT_SECRET`
-- `MOCK_MESSAGE`
-- `MAIL_USERNAME`
-- `MAIL_PASSWORD`
-
-Também sao necessários secrets para autenticação na AWS:
-
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
-- `AWS_SESSION_TOKEN`, quando a credencial utilizada for temporária
-
-## Justificativa do AWS Secrets Manager
-
-O AWS Secrets Manager e usado para centralizar valores sensíveis da aplicação em um serviço próprio para segredos.
-
-Isso evita que senhas e tokens fiquem gravados no repositório, em arquivos de configuração da aplicação ou em logs de deploy. O secret `pitflow/bootstrap` armazena os valores em formato JSON, facilitando o consumo posterior pela aplicação ou por outros recursos AWS.
-
-Conteúdo criado no secret:
-
-```json
-{
-  "DB_PASSWORD": "...",
-  "JWT_SECRET": "...",
-  "MOCK_MESSAGE": "...",
-  "MAIL_USERNAME": "...",
-  "MAIL_PASSWORD": "..."
-}
+JWT_SECRET
+MOCK_MESSAGE
+MAIL_USERNAME
+MAIL_PASSWORD
+DATADOG_API_KEY
 ```
 
-## Justificativa do S3 na Action
+Na primeira execução, os hosts são inicializados como string vazia e as portas
+como `5432`. O bootstrap usa atribuição condicional para esses campos: valores
+já publicados pelo `pitflow-database` são preservados.
 
-O bucket S3 `tfstate-backend-fiap-pitflow` e criado no workflow para servir como backend remoto do Terraform state.
+As chaves genéricas antigas `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`, `DB_HOST`
+e `DB_PORT` são removidas pelo merge.
 
-O state do Terraform registra os recursos criados e seus identificadores. Guarda-lo em S3 traz benefícios importantes:
+## GitHub Secrets necessários
 
-- mantém o state fora da maquina local do desenvolvedor;
-- permite que a pipeline e outros operadores trabalhem sobre o mesmo estado;
-- reduz o risco de perder o state local;
-- habilita versionamento do bucket, permitindo recuperar versões anteriores do state em caso de erro.
+Credenciais dos bancos:
 
-
-## Como executar localmente
-
-### Pre-requisitos
-
-- Terraform `>= 1.5.0`
-- AWS CLI configurado ou credenciais AWS disponíveis no ambiente
-- Permissões AWS para criar e gerenciar Secrets Manager
-- Caso use backend S3, permissões para acessar o bucket `tfstate-backend-fiap-pitflow`
-
-### Credenciais AWS
-
-Antes de rodar o Terraform localmente, configure as credenciais da AWS.
-
-Opção com AWS CLI:
-
-```bash
-aws configure
+```text
+PITFLOW_OPERATION_DB_USERNAME
+PITFLOW_OPERATION_DB_PASSWORD
+PITFLOW_INVENTORY_DB_USERNAME
+PITFLOW_INVENTORY_DB_PASSWORD
+PITFLOW_REGISTRY_DB_USERNAME
+PITFLOW_REGISTRY_DB_PASSWORD
+PITFLOW_PAYMENT_DB_USERNAME
+PITFLOW_PAYMENT_DB_PASSWORD
 ```
 
-Opção com variáveis de ambiente:
+Configurações compartilhadas:
 
-```bash
-export AWS_ACCESS_KEY_ID="..."
-export AWS_SECRET_ACCESS_KEY="..."
-export AWS_SESSION_TOKEN="..."
-export AWS_DEFAULT_REGION="us-east-1"
+```text
+JWT_SECRET
+MOCK_MESSAGE
+MAIL_USERNAME
+MAIL_PASSWORD
+DATADOG_API_KEY
 ```
 
-No Windows PowerShell:
-
-```powershell
-$env:AWS_ACCESS_KEY_ID="..."
-$env:AWS_SECRET_ACCESS_KEY="..."
-$env:AWS_SESSION_TOKEN="..."
-$env:AWS_DEFAULT_REGION="us-east-1"
-```
-
-### Criar o arquivo `terraform.tfvars`
-
-Crie ou atualize o arquivo `infra/terraform/terraform.tfvars` com os valores necessários:
-
-```hcl
-db_password   = "sua-senha-do-banco"
-jwt_secret    = "sua-chave-jwt"
-mock_message  = "mensagem"
-mail_username = "usuario@email.com"
-mail_password = "senha-do-email"
-```
-
-Esse arquivo nao deve ser versionado. Ele esta coberto pelo `.gitignore` porque contem dados sensíveis.
-
-### Executar os comandos
-
-Acesse a pasta do Terraform:
-
-```bash
-cd infra/terraform
-```
-
-Comente o conteúdo do arquivo `backend.tf`
-
-Inicialize o Terraform:
-
-```bash
-terraform init
-```
-
-Formate os arquivos:
-
-```bash
-terraform fmt -recursive
-```
-
-Valide a configuração:
-
-```bash
-terraform validate
-```
-
-Gere o plano:
-
-```bash
-terraform plan -out=main.tfplan
-```
-
-Aplique a infraestrutura:
-
-```bash
-terraform apply main.tfplan
-```
-
-Consultar o output:
-
-```bash
-terraform output secret_pitflow_name
-```
-
-## Execução via GitHub Actions
-
-Para a pipeline funcionar, garanta que as credenciais da AWS estejam atualizadas!
+Autenticação na AWS:
 
 ```text
 AWS_ACCESS_KEY_ID
@@ -193,10 +110,67 @@ AWS_SECRET_ACCESS_KEY
 AWS_SESSION_TOKEN
 ```
 
-Depois disso, a action pode ser executada automaticamente em push para `main` ou manualmente pela aba Actions do GitHub.
+`AWS_SESSION_TOKEN` é necessário quando as credenciais AWS são temporárias.
+Todos os valores sensíveis são passados pelo contexto `${{ secrets.NOME }}` do
+GitHub Actions e não são impressos pelo workflow.
 
-## Observações importantes
+## Valores padronizados
 
-- Nunca commite o arquivo `terraform.tfvars` com valores reais.
-- Para usar state local, comente o bloco de backend em `backend.tf` e rode `terraform init`.
-- O secret criado na AWS se chama `pitflow/bootstrap`, e o nome e exposto pelo output `secret_pitflow_name`.
+O workflow define:
+
+| Chave | Valor |
+| --- | --- |
+| `PITFLOW_OPERATION_DB_NAME` | `pitflow-operation-db` |
+| `PITFLOW_INVENTORY_DB_NAME` | `pitflow-inventory-db` |
+| `PITFLOW_REGISTRY_DB_NAME` | `pitflow-registry-db` |
+| `PITFLOW_PAYMENT_DB_NAME` | `pitflow-payment-db` |
+| `PITFLOW_*_DB_PORT` | `5432`, somente quando ausente |
+| `PITFLOW_ORCHESTRATOR_TABLE_NAME` | `pitflow-orchestrator` |
+| `PITFLOW_ORCHESTRATOR_AWS_REGION` | `us-east-1` |
+
+## Execução pelo GitHub Actions
+
+O workflow `.github/workflows/main.yml` executa em pushes para `main` ou
+manualmente por `workflow_dispatch`.
+
+1. Cria o bucket de state caso ele ainda não exista.
+2. Executa `terraform fmt`, `validate` e `plan`.
+3. Valida se todos os GitHub Secrets obrigatórios foram configurados.
+4. Executa o `terraform apply` para criar ou atualizar o contêiner do secret.
+5. Lê o JSON atual do Secrets Manager.
+6. Mescla apenas as chaves pertencentes ao bootstrap e inicializa host/porta
+   somente quando ainda não existem.
+7. Publica uma nova versão do secret sem registrar seu conteúdo nos logs.
+
+O principal da AWS usado pelo workflow precisa de acesso ao bucket de state e
+das permissões necessárias para criar, descrever, ler e publicar versões em
+`pitflow/bootstrap`.
+
+## Execução local do Terraform
+
+Configure credenciais AWS e execute:
+
+É necessário Terraform `>= 1.5.0`.
+
+```bash
+cd infra/terraform
+terraform init
+terraform fmt -check -recursive
+terraform validate
+terraform plan -out=main.tfplan
+terraform apply main.tfplan
+terraform output secret_pitflow_name
+```
+
+O merge do conteúdo do secret pertence ao workflow. Uma execução local do
+Terraform cria ou atualiza somente o recurso `aws_secretsmanager_secret`.
+
+## Segurança
+
+- Não grave credenciais em `terraform.tfvars` ou no repositório.
+- Não imprima o JSON atual ou o arquivo temporário criado pelo workflow.
+- O arquivo temporário é removido ao término do passo, inclusive em falhas.
+- Cada produtor deve ler e mesclar o JSON existente em vez de substituir todas
+  as chaves.
+- Restrinja `secretsmanager:GetSecretValue` e
+  `secretsmanager:PutSecretValue` ao secret `pitflow/bootstrap`.

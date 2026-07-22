@@ -86,23 +86,120 @@ jobs:
       - name: Terraform Plan
         run: |
           cd infra/terraform
-          terraform plan \
-            -var="db_password=${{ secrets.DB_PASSWORD }}" \
-            -var="db_username=${{ secrets.DB_USERNAME }}" \
-            -var="db_name=${{ secrets.DB_NAME }}" \
-            -var="db_host=${{ secrets.DB_HOST }}" \
-            -var="db_port=${{ secrets.DB_PORT }}" \
-            -var="jwt_secret=${{ secrets.JWT_SECRET }}" \
-            -var="mock_message=${{ secrets.MOCK_MESSAGE }}" \
-            -var="mail_username=${{ secrets.MAIL_USERNAME }}" \
-            -var="mail_password=${{ secrets.MAIL_PASSWORD }}" \
-            -var="datadog_api_key=${{ secrets.DATADOG_API_KEY }}" \
-            -out=main.tfplan
+          terraform plan -out=main.tfplan
+
+      - name: Validate Required GitHub Secrets
+        env:
+          PITFLOW_OPERATION_DB_USERNAME: ${{ secrets.PITFLOW_OPERATION_DB_USERNAME }}
+          PITFLOW_OPERATION_DB_PASSWORD: ${{ secrets.PITFLOW_OPERATION_DB_PASSWORD }}
+          PITFLOW_INVENTORY_DB_USERNAME: ${{ secrets.PITFLOW_INVENTORY_DB_USERNAME }}
+          PITFLOW_INVENTORY_DB_PASSWORD: ${{ secrets.PITFLOW_INVENTORY_DB_PASSWORD }}
+          PITFLOW_REGISTRY_DB_USERNAME: ${{ secrets.PITFLOW_REGISTRY_DB_USERNAME }}
+          PITFLOW_REGISTRY_DB_PASSWORD: ${{ secrets.PITFLOW_REGISTRY_DB_PASSWORD }}
+          PITFLOW_PAYMENT_DB_USERNAME: ${{ secrets.PITFLOW_PAYMENT_DB_USERNAME }}
+          PITFLOW_PAYMENT_DB_PASSWORD: ${{ secrets.PITFLOW_PAYMENT_DB_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          MOCK_MESSAGE: ${{ secrets.MOCK_MESSAGE }}
+          MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+          DATADOG_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          required_secrets=(
+            PITFLOW_OPERATION_DB_USERNAME
+            PITFLOW_OPERATION_DB_PASSWORD
+            PITFLOW_INVENTORY_DB_USERNAME
+            PITFLOW_INVENTORY_DB_PASSWORD
+            PITFLOW_REGISTRY_DB_USERNAME
+            PITFLOW_REGISTRY_DB_PASSWORD
+            PITFLOW_PAYMENT_DB_USERNAME
+            PITFLOW_PAYMENT_DB_PASSWORD
+            JWT_SECRET
+            MOCK_MESSAGE
+            MAIL_USERNAME
+            MAIL_PASSWORD
+            DATADOG_API_KEY
+          )
+
+          for secret_name in "${required_secrets[@]}"; do
+            if [ -z "${!secret_name}" ]; then
+              echo "GitHub Secret obrigatório não configurado: ${secret_name}" >&2
+              exit 1
+            fi
+          done
 
       - name: Terraform Apply
         run: |
           cd infra/terraform
           terraform apply -auto-approve main.tfplan
+
+      - name: Merge Bootstrap Values Into Secret
+        env:
+          SECRET_NAME: pitflow/bootstrap
+          PITFLOW_OPERATION_DB_USERNAME: ${{ secrets.PITFLOW_OPERATION_DB_USERNAME }}
+          PITFLOW_OPERATION_DB_PASSWORD: ${{ secrets.PITFLOW_OPERATION_DB_PASSWORD }}
+          PITFLOW_INVENTORY_DB_USERNAME: ${{ secrets.PITFLOW_INVENTORY_DB_USERNAME }}
+          PITFLOW_INVENTORY_DB_PASSWORD: ${{ secrets.PITFLOW_INVENTORY_DB_PASSWORD }}
+          PITFLOW_REGISTRY_DB_USERNAME: ${{ secrets.PITFLOW_REGISTRY_DB_USERNAME }}
+          PITFLOW_REGISTRY_DB_PASSWORD: ${{ secrets.PITFLOW_REGISTRY_DB_PASSWORD }}
+          PITFLOW_PAYMENT_DB_USERNAME: ${{ secrets.PITFLOW_PAYMENT_DB_USERNAME }}
+          PITFLOW_PAYMENT_DB_PASSWORD: ${{ secrets.PITFLOW_PAYMENT_DB_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          MOCK_MESSAGE: ${{ secrets.MOCK_MESSAGE }}
+          MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+          DATADOG_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          secret_file="$(mktemp)"
+          trap 'rm -f "${secret_file}"' EXIT
+
+          current_secret="$(
+            aws secretsmanager get-secret-value \
+              --secret-id "${SECRET_NAME}" \
+              --query SecretString \
+              --output text 2>/dev/null || printf '{}'
+          )"
+
+          printf '%s' "${current_secret}" | jq '
+            del(.DB_NAME, .DB_USERNAME, .DB_PASSWORD, .DB_HOST, .DB_PORT)
+            | . + {
+              PITFLOW_OPERATION_DB_NAME: "pitflow-operation-db",
+              PITFLOW_OPERATION_DB_USERNAME: env.PITFLOW_OPERATION_DB_USERNAME,
+              PITFLOW_OPERATION_DB_PASSWORD: env.PITFLOW_OPERATION_DB_PASSWORD,
+              PITFLOW_INVENTORY_DB_NAME: "pitflow-inventory-db",
+              PITFLOW_INVENTORY_DB_USERNAME: env.PITFLOW_INVENTORY_DB_USERNAME,
+              PITFLOW_INVENTORY_DB_PASSWORD: env.PITFLOW_INVENTORY_DB_PASSWORD,
+              PITFLOW_REGISTRY_DB_NAME: "pitflow-registry-db",
+              PITFLOW_REGISTRY_DB_USERNAME: env.PITFLOW_REGISTRY_DB_USERNAME,
+              PITFLOW_REGISTRY_DB_PASSWORD: env.PITFLOW_REGISTRY_DB_PASSWORD,
+              PITFLOW_PAYMENT_DB_NAME: "pitflow-payment-db",
+              PITFLOW_PAYMENT_DB_USERNAME: env.PITFLOW_PAYMENT_DB_USERNAME,
+              PITFLOW_PAYMENT_DB_PASSWORD: env.PITFLOW_PAYMENT_DB_PASSWORD,
+              PITFLOW_ORCHESTRATOR_TABLE_NAME: "pitflow-orchestrator",
+              PITFLOW_ORCHESTRATOR_AWS_REGION: "us-east-1",
+              JWT_SECRET: env.JWT_SECRET,
+              MOCK_MESSAGE: env.MOCK_MESSAGE,
+              MAIL_USERNAME: env.MAIL_USERNAME,
+              MAIL_PASSWORD: env.MAIL_PASSWORD,
+              DATADOG_API_KEY: env.DATADOG_API_KEY
+            }
+            | .PITFLOW_OPERATION_DB_HOST //= ""
+            | .PITFLOW_OPERATION_DB_PORT //= "5432"
+            | .PITFLOW_INVENTORY_DB_HOST //= ""
+            | .PITFLOW_INVENTORY_DB_PORT //= "5432"
+            | .PITFLOW_REGISTRY_DB_HOST //= ""
+            | .PITFLOW_REGISTRY_DB_PORT //= "5432"
+            | .PITFLOW_PAYMENT_DB_HOST //= ""
+            | .PITFLOW_PAYMENT_DB_PORT //= "5432"
+          ' > "${secret_file}"
+
+          aws secretsmanager put-secret-value \
+            --secret-id "${SECRET_NAME}" \
+            --secret-string "file://${secret_file}" \
+            > /dev/null
 
       - name: Capture Outputs
         id: tf-output
